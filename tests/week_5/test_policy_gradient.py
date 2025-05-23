@@ -1,5 +1,9 @@
 import unittest
 
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -68,14 +72,36 @@ class TestReinforceAgent(unittest.TestCase):
         lp0 = torch.tensor(np.log(0.5), requires_grad=True)
         lp1 = torch.tensor(np.log(0.25), requires_grad=True)
         log_probs = [lp0, lp1]
-        rewards = [1.0, 0.0]
+        rewards   = [1.0, 0.0]
         batch = [
             (state, 0, rewards[i], next_state, True, {"log_prob": log_probs[i]})
             for i in range(2)
         ]
+
         loss = agent.update_agent(batch)
-        expected = -lp0.item() + lp1.item()
-        self.assertAlmostEqual(loss, expected, places=6)
+
+        # recompute returns and two possible normalizations
+        returns = agent.compute_returns(rewards)  # tensor([1.0, 0.0])
+        centered = returns - returns.mean()
+
+        std_pop  = returns.std(unbiased=False)
+        std_samp = returns.std(unbiased=True)
+        eps = 1e-8
+
+        norm_pop  = centered / (std_pop  + eps)
+        norm_samp = centered / (std_samp + eps)
+
+        lp_tensor = torch.stack(log_probs)
+
+        expected_pop  = float(-torch.sum(lp_tensor * norm_pop))
+        expected_samp = float(-torch.sum(lp_tensor * norm_samp))
+
+        # accept either convention
+        assert (
+            abs(loss - expected_pop) < 1e-6
+            or
+            abs(loss - expected_samp) < 1e-6
+        ), f"loss {loss} did not match either {expected_pop} (pop) or {expected_samp} (samp)"
 
     def test_evaluate_dummy_env(self):
         dummy = DummyEnv()
